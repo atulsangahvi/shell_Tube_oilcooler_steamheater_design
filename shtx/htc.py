@@ -17,12 +17,23 @@ def tube_singlephase_htc(m, rho, mu, k, cp, D, A):
         Nu = (f / 8 * (Re - 1000) * Pr) / (1 + 12.7 * math.sqrt(f / 8) * (Pr ** (2/3) - 1))
     return Nu * k / max(D, 1e-12), Re, Pr, v
 
-def shell_h_ideal_bank(rho, mu, k, cp, do, v):
-    # simple tube-bank starter (placeholder for full ideal j-correlation)
-    Re = rho * v * do / max(mu, 1e-12)
+def shell_htc_zukauskas(rho, mu, k, cp, do, v_max, layout="tri30"):
+    # Tube bank correlation (Zukauskas-style) with staggered vs inline constants.
+    # Uses do as characteristic; v_max should be maximum crossflow velocity through bundle.
+    Re = rho * v_max * do / max(mu, 1e-12)
     Pr = cp * mu / max(k, 1e-12)
-    Nu = 5.0 if Re < 100 else 0.27 * (Re**0.63) * (Pr**0.36)
-    return Nu * k / max(do, 1e-12), Re, Pr
+
+    # constants for tube banks (engineering-grade)
+    if layout == "tri30":  # staggered
+        C, m = (0.35, 0.60) if Re < 1e3 else (0.27, 0.63)
+        n = 0.36
+    else:  # inline
+        C, m = (0.30, 0.60) if Re < 1e3 else (0.21, 0.64)
+        n = 0.36
+
+    Nu = C * (max(Re, 1e-6) ** m) * (max(Pr, 1e-6) ** n)
+    h = Nu * k / max(do, 1e-12)
+    return h, Re, Pr
 
 def bell_delaware_apply(h, Jc, Jl, Jb, Jr):
     return h * Jc * Jl * Jb * Jr
