@@ -1,4 +1,35 @@
 import streamlit as st
+import hmac
+
+def require_password():
+    # Read from secrets (preferred). If missing, block.
+    pw = st.secrets.get("APP_PASSWORD", None)
+    if not pw:
+        st.error("App password is not configured.")
+        st.stop()
+
+    if "auth_ok" not in st.session_state:
+        st.session_state.auth_ok = False
+
+    if st.session_state.auth_ok:
+        return
+
+    st.subheader("Login")
+    entered = st.text_input("Password", type="password")
+
+    # No hints, no password shown anywhere.
+    if entered:
+        if hmac.compare_digest(entered, pw):
+            st.session_state.auth_ok = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+            st.stop()
+    else:
+        st.stop()
+
+require_password()
+
 from shtx.units import mm_to_m
 from shtx.props import water_props, brine_props, oil_props_from_d341, steam_sat_props
 from shtx.solver import segmented_singlephase, steam_heater_simple
