@@ -4,3 +4,4 @@ pandas
 scipy
 CoolProp
 xlrd>=2.0.1
+reportlab
