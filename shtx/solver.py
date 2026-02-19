@@ -1,10 +1,10 @@
 import math
 from dataclasses import dataclass
-from shtx.geometry import tube_outside_area, tube_flow_area, approx_shell_crossflow_area
-from shtx.htc import tube_singlephase_htc, shell_h_ideal_bank, bell_delaware_apply, nusselt_film_condensation_horizontal_bank
-from shtx.dp import tube_dp_darcy, shell_dp_ideal_kern
+from shtx.geometry import tube_outside_area, tube_flow_area, shell_crossflow_area, tube_pitch, equiv_diameter
+from shtx.htc import tube_singlephase_htc, shell_htc_zukauskas, bell_delaware_apply, nusselt_film_condensation_horizontal_bank
+from shtx.dp import tube_dp_darcy, shell_dp_kern_segmental
 from shtx.effectiveness import eps_crossflow_unmixed, eps_1shell
-from shtx.bell_estimates import estimate_leakage_fractions, estimate_Jl_from_clearances
+from shtx.bell_estimates import estimate_leakage_fractions
 
 @dataclass
 class SegRes:
@@ -19,6 +19,7 @@ class SegRes:
     area_m2: float
     J_used: dict
     leak: dict
+    debug: dict
 
 def overall_Uo(hs, ht, Rfs, Rft, do, di, tw, kw):
     Ao_Ai = do / max(di, 1e-12)
@@ -30,14 +31,17 @@ def segmented_singlephase(p_shell, p_tube, Th_in, Tc_in, mh, mc, geom, foul, J, 
     do = geom["do"]; di = geom["di"]; tw = geom["tw"]; L = geom["L"]; n = geom["n"]; passes = geom["passes"]
     Ds = geom["Ds"]; bs = geom["bs"]; bc = geom["bc"]
 
+    layout = geom.get("layout","tri30")
+    p_over_do = geom.get("p_over_do",1.25)
+    Pt = tube_pitch(do, p_over_do)
+    De = equiv_diameter(Pt, do, layout)
+    As = shell_crossflow_area(Ds, bs, bc, do, Pt, layout)
+
     A = tube_outside_area(n, do, L)
     dA = A / max(N, 1)
     At = tube_flow_area(n, di, passes)
-    As = approx_shell_crossflow_area(Ds, bs, bc)
 
-    # leakage estimate (for reporting + optional auto Jl mapping done in UI)
     leak = estimate_leakage_fractions(n, do, Ds, geom.get("delta_tb_m", 0.0), geom.get("delta_sb_m", 0.0))
-    # If UI provided Jl="AUTO", you could compute it here; we do it in app and pass numbers.
     leak["r_leak"] = leak["A_leak"] / max(As, 1e-12)
 
     Th, Tc = Th_in, Tc_in
@@ -46,13 +50,19 @@ def segmented_singlephase(p_shell, p_tube, Th_in, Tc_in, mh, mc, geom, foul, J, 
     dpt = 0.0
     dps = 0.0
 
-    for _ in range(N):
+    # baffle compartments for dp (approx)
+    Nb = max(int(round(L / max(bs, 1e-6))), 1)
+
+    debug_mid=None
+
+    for i in range(N):
         ph = p_shell(Th)
         pc = p_tube(Tc)
 
-        ht, _, _, _ = tube_singlephase_htc(mc, pc["rho"], pc["mu"], pc["k"], pc["cp"], di, At)
-        vs = mh / (ph["rho"] * max(As, 1e-12))
-        hid, _, _ = shell_h_ideal_bank(ph["rho"], ph["mu"], ph["k"], ph["cp"], do, vs)
+        ht, Re_t, Pr_t, v_t = tube_singlephase_htc(mc, pc["rho"], pc["mu"], pc["k"], pc["cp"], di, At)
+
+        v_max = mh / (ph["rho"] * max(As, 1e-12))
+        hid, Re_s, Pr_s = shell_htc_zukauskas(ph["rho"], ph["mu"], ph["k"], ph["cp"], do, v_max, layout)
         hs = bell_delaware_apply(hid, J["Jc"], J["Jl"], J["Jb"], J["Jr"])
 
         U = overall_Uo(hs, ht, foul["Rf_shell"], foul["Rf_tube"], do, di, tw, kw)
@@ -74,10 +84,13 @@ def segmented_singlephase(p_shell, p_tube, Th_in, Tc_in, mh, mc, geom, foul, J, 
         dL = L / max(N, 1)
         dpt += tube_dp_darcy(mc, pc["rho"], pc["mu"], di, dL, At, passes, 0.0)
 
-        # shell dp placeholder: scale with J-product to reflect leakage/bypass effects directionally
-        dps += shell_dp_ideal_kern(mh, ph["rho"], As, 1.2) / max(J["Jc"] * J["Jl"] * J["Jb"] * J["Jr"], 1e-12)
+        # distribute shell dp uniformly over segments (total computed using midpoint props)
+        if i == int(N/2):
+            debug_mid=dict(v_max=v_max, As=As, De=De, Re_shell=Re_s, Pr_shell=Pr_s, ht=ht, hs=hs, hid=hid, Re_tube=Re_t, v_tube=v_t)
+            dp_total = shell_dp_kern_segmental(mh, ph["rho"], ph["mu"], v_max, De, Ds, Nb, K_window=1.6) / max(J["Jl"]*J["Jb"],1e-12)
+            dps = dp_total
 
-    return SegRes(flow_model, N, Qt, Us / max(N, 1), Th, Tc, dps / 1000.0, dpt / 1000.0, A, J, leak)
+    return SegRes(flow_model, N, Qt, Us / max(N, 1), Th, Tc, dps / 1000.0, dpt / 1000.0, A, J, leak, debug_mid or {})
 
 def steam_heater_simple(p_tube, tci, mc, psteam, geom, foul, kw=16.0):
     do = geom["do"]; di = geom["di"]; tw = geom["tw"]; L = geom["L"]; n = geom["n"]; passes = geom["passes"]
