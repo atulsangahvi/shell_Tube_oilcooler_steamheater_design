@@ -13,3 +13,6 @@ def approx_shell_crossflow_area(Ds, bs, bc):
 
 def tube_pitch(do_m: float, p_over_do: float):
     return do_m * p_over_do
+def shell_crossflow_area(Ds, bs, bc):
+    # Compatibility alias for newer solver.py
+    return approx_shell_crossflow_area(Ds, bs, bc)
